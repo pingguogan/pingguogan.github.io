@@ -2,23 +2,53 @@
 
 set -e
 
-echo "[+] 禁止 root 远程密码登录（仅允许密钥）..."
+echo "[+] 检测系统类型..."
 
-# 1. 备份配置
-cp /etc/ssh/sshd_config /etc/ssh/sshd_config.bak
-
-# 2. 设置 root 仅允许密钥登录
-sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
-
-# 3. （可选）确保密码认证开启（不影响 root，但允许普通用户用密码）
-if ! grep -q "^PasswordAuthentication" /etc/ssh/sshd_config; then
-    echo "PasswordAuthentication yes" >> /etc/ssh/sshd_config
+# 识别系统
+if [ -f /etc/os-release ]; then
+    . /etc/os-release
+    OS=$ID
 else
-    sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+    echo "[-] 无法识别系统"
+    exit 1
 fi
 
-# 4. 重启 SSH 服务
-echo "[+] 重启 SSH 服务..."
-systemctl restart ssh
+echo "[+] 当前系统: $OS"
 
-echo "[✓] 已完成：root 禁止密码登录，仅允许密钥登录"
+SSHD_CONFIG="/etc/ssh/sshd_config"
+
+# 备份
+cp $SSHD_CONFIG ${SSHD_CONFIG}.bak_$(date +%F_%T)
+
+echo "[+] 修改 SSH 配置..."
+
+# 设置 root 禁止密码登录（仅允许密钥）
+if grep -q "^PermitRootLogin" $SSHD_CONFIG; then
+    sed -i 's/^PermitRootLogin.*/PermitRootLogin prohibit-password/' $SSHD_CONFIG
+else
+    echo "PermitRootLogin prohibit-password" >> $SSHD_CONFIG
+fi
+
+# 确保 PasswordAuthentication 开启（不影响 root，但允许普通用户密码登录）
+if grep -q "^PasswordAuthentication" $SSHD_CONFIG; then
+    sed -i 's/^PasswordAuthentication.*/PasswordAuthentication yes/' $SSHD_CONFIG
+else
+    echo "PasswordAuthentication yes" >> $SSHD_CONFIG
+fi
+
+echo "[+] 检查 SSH 配置合法性..."
+sshd -t
+
+echo "[+] 重启 SSH 服务..."
+
+# 不同系统服务名不同
+if systemctl list-units --type=service | grep -q sshd; then
+    systemctl restart sshd
+elif systemctl list-units --type=service | grep -q ssh; then
+    systemctl restart ssh
+else
+    echo "[-] 未找到 ssh 服务，请手动重启"
+    exit 1
+fi
+
+echo "[✓] 完成：root 已禁止密码登录（仅允许密钥）"
